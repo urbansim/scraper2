@@ -56,6 +56,8 @@ print("Archiving data.")
 
 shutil.make_archive('/home/mgardner/scraper2/archives/rental_listings-' + ts,
                     'zip', '/home/mgardner/scraper2/data')
+
+### SLACK INTEGRATION HERE BASED ON FILE SIZE OF ARCHIVE
 [os.remove(x) for x in glob.glob("/home/mgardner/scraper2/data/*" +
                                  ts + ".csv")]
 

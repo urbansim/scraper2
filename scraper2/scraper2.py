@@ -18,10 +18,13 @@ import os
 import glob
 import subprocess
 
+requests.packages.urllib3.disable_warnings()
+
 # Some defaults, which can be overridden when the class is called
 
 DOMAINS = ['http://sfbay.craigslist.org','http://modesto.craigslist.org/search/apa',
            'http://olympic.craigslist.org/search/apa']
+
 
 # Craigslist doesn't use time zones in its timestamps, so these cutoffs will be
 # interpreted relative to the local time at the listing location. For example, dt.now()
@@ -59,6 +62,10 @@ class RentalListingScraper(object):
         self.s3_upload = s3_upload
         self.s3_bucket = s3_bucket
         self.ts = fname_ts  # Use timestamp as file id
+        self.proxies = {
+                            'http': 'http://87783015bbe2d2f900e2f8be352c414a:@workdistribute.charityengine.com:20000',
+                            'https': 'https://87783015bbe2d2f900e2f8be352c414a:@workdistribute.charityengine.com:20000'
+                        }
 
         log_fname = '/home/mgardner/scraper2/logs/' + self.fname_base \
                 + (self.ts if self.fname_ts else '') + '.log'
@@ -96,7 +103,10 @@ class RentalListingScraper(object):
 
     def _toFloat(self, string_value):
         string_value = string_value.strip()
-        return np.float(string_value) if string_value else np.nan
+        try:
+            return np.float(string_value) if string_value else np.nan
+        except:
+            return np.nan
         
 
     def _parseListing(self, item):
@@ -144,17 +154,20 @@ class RentalListingScraper(object):
         return urllib.unquote_plus(url.split('?q=loc')[1]).strip(' :')
 
     
-    def _scrapeLatLng(self, session, url, proxy=True):
+    def _scrapeLatLng(self, url, proxy=True):
     
-        s = session
+        # s = session
         # if proxy:
         #     requests.packages.urllib3.disable_warnings()
         #     authenticator = '87783015bbe2d2f900e2f8be352c414a'
         #     proxy_str = 'http://' + authenticator + '@' +'workdistribute.charityengine.com:20000'
         #     s.proxies = {'http': proxy_str, 'https': proxy_str}
         #     s.auth = HTTPProxyAuth(authenticator,'') 
-
-        page = s.get(url, timeout=30)
+        proxies = {
+                  'http': 'http://87783015bbe2d2f900e2f8be352c414a:@workdistribute.charityengine.com:20000',
+                  'https': 'https://87783015bbe2d2f900e2f8be352c414a:@workdistribute.charityengine.com:20000'
+                }
+        page = requests.get(url, timeout=30, proxies=proxies, verify=False)
         tree = html.fromstring(page.content)
         try:
             baths = tree.xpath('//div[@class="mapAndAttrs"]/p[@class="attrgroup"]/span/b')[1].text[:-2]
@@ -239,7 +252,7 @@ class RentalListingScraper(object):
         host='localhost'
         port=5432
         username='mgardner'
-        passwd='craig'
+        passwd='Gardner0942'
         conn_str = "dbname={0} user={1} host={2} password={3} port={4}".format(dbname,username,host,passwd,port)
         conn = psycopg2.connect(conn_str)
         cur = conn.cursor()
@@ -297,24 +310,30 @@ class RentalListingScraper(object):
                 while not regionIsComplete:
 
                     logging.info(search_url)
-                    s = requests.Session()
+                    # s = requests.Session()
 
-                    if charity_proxy:
-                        requests.packages.urllib3.disable_warnings()
-                        authenticator = '87783015bbe2d2f900e2f8be352c414a'
-                        proxy_str = 'http://' + authenticator + '@' +'workdistribute.charityengine.com:20000'
-                        s.proxies = {'http': proxy_str, 'https': proxy_str}
-                        s.auth = HTTPProxyAuth(authenticator,'')
+                    # if charity_proxy:
+                    #     requests.packages.urllib3.disable_warnings()
+                        
+                    #     # s.auth = HTTPProxyAuth(authenticator,'')
+                    proxies = {
+                          'http': 'http://87783015bbe2d2f900e2f8be352c414a:@workdistribute.charityengine.com:20000',
+                          'https': 'https://87783015bbe2d2f900e2f8be352c414a:@workdistribute.charityengine.com:20000'
+                        }
 
                     try:
-                        page = s.get(search_url, timeout=30)
+                        
+                        page = requests.get(search_url, proxies=proxies, timeout=30, verify=False)
                     except requests.exceptions.Timeout:
-                        s = requests.Session()
-                        if charity_proxy:
-                            s.proxies = {'http': proxy_str, 'https': proxy_str}
-                            s.auth = HTTPProxyAuth(authenticator,'')
+                        # s = requests.Session()
+                        # if charity_proxy:
+                        #     s.proxies = {
+                        #         'http': 'http://87783015bbe2d2f900e2f8be352c414a:@workdistribute.charityengine.com:20000',
+                        #         'https': 'https://87783015bbe2d2f900e2f8be352c414a:@workdistribute.charityengine.com:20000'
+                        #     }
+                        #     # s.auth = HTTPProxyAuth(authenticator,'')
                         try:
-                            page = s.get(search_url, timeout=30)    
+                            page = requests.get(search_url, proxies=proxies, timeout=30, verify=False)    
                         except:
                             regionIsComplete = True
                             logging.info('FAILED TO CONNECT.')
@@ -361,7 +380,7 @@ class RentalListingScraper(object):
 
                             # Parse listing page to get lat-lng
                             logging.info(item_url)
-                            row += self._scrapeLatLng(s, item_url)
+                            row += self._scrapeLatLng(item_url)
                             writer.writerow(row)
 
                         except Exception, e:
@@ -376,7 +395,6 @@ class RentalListingScraper(object):
                         regionIsComplete = True
                         logging.info('RECEIVED ERROR PAGE')
 
-                    s.close()
             
             # print ts_skipped
 
