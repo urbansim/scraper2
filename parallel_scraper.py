@@ -21,7 +21,7 @@ with open('/home/mgardner/scraper2/domains.txt', 'rb') as f:
 # domains = ['http://losangeles.craigslist.org/search/apa']
 
 lookback = 1  # hours
-
+print(lookback)
 earliest_ts = dt.now() - timedelta(hours=lookback)
 latest_ts = dt.now() + timedelta(hours=0)
 ts = dt.now().strftime('%Y%m%d-%H%M%S')

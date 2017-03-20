@@ -167,7 +167,13 @@ class RentalListingScraper(object):
                   'http': 'http://87783015bbe2d2f900e2f8be352c414a:@workdistribute.charityengine.com:20000',
                   'https': 'https://87783015bbe2d2f900e2f8be352c414a:@workdistribute.charityengine.com:20000'
                 }
-        page = requests.get(url, timeout=30, proxies=proxies, verify=False)
+        try:
+            page = requests.get(url, timeout=30, proxies=proxies, verify=False)
+            # page = requests.get(url, timeout=30, verify=False)
+        except:
+            page = requests.get(url, timeout=30, proxies=proxies, verify=False)
+            # page = requests.get(url, timeout=30, verify=False)
+            
         tree = html.fromstring(page.content)
         try:
             baths = tree.xpath('//div[@class="mapAndAttrs"]/p[@class="attrgroup"]/span/b')[1].text[:-2]
@@ -324,6 +330,7 @@ class RentalListingScraper(object):
                     try:
                         
                         page = requests.get(search_url, proxies=proxies, timeout=30, verify=False)
+                        # page = requests.get(search_url, timeout=30, verify=False)
                     except requests.exceptions.Timeout:
                         # s = requests.Session()
                         # if charity_proxy:
@@ -333,7 +340,8 @@ class RentalListingScraper(object):
                         #     }
                         #     # s.auth = HTTPProxyAuth(authenticator,'')
                         try:
-                            page = requests.get(search_url, proxies=proxies, timeout=30, verify=False)    
+                            page = requests.get(search_url, proxies=proxies, timeout=30, verify=False)
+                            # page = requests.get(search_url, timeout=30, verify=False)
                         except:
                             regionIsComplete = True
                             logging.info('FAILED TO CONNECT.')
@@ -380,8 +388,13 @@ class RentalListingScraper(object):
 
                             # Parse listing page to get lat-lng
                             logging.info(item_url)
-                            row += self._scrapeLatLng(item_url)
-                            writer.writerow(row)
+
+                            try:
+                                row += self._scrapeLatLng(item_url)
+                                writer.writerow(row)
+                            except Exception, e:
+                                logging.warning("{0}: {1}. Couldn't scrape lat/lon/baths at {2}".format(type(e).__name__, e,item_url))
+                                continue
 
                         except Exception, e:
                             # Skip listing if there are problems parsing it
@@ -397,7 +410,7 @@ class RentalListingScraper(object):
 
             
             # print ts_skipped
-
+            # SLACK WARNING HERE
             if ts_skipped == total_listings:
                 logging.info(('{0} TIMESTAMPS NOT MATCHING' +
                              ' - CL: {1} vs. UAL: {2}.' +
