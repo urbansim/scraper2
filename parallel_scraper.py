@@ -8,20 +8,20 @@ import multiprocessing
 import shutil
 import subprocess
 import glob
-sys.path.insert(0, '/home/mgardner/scraper2/scraper2')
-import scraper2
+import numpy as np
+import logging
+import json
+from scraper2 import scraper2
+from slackclient import SlackClient
 
-# add subfolder to system path
 
 domains = []
+
 with open('/home/mgardner/scraper2/domains.txt', 'rb') as f:
     for line in f.readlines():
         domains.append((line.strip()))
 
-# domains = ['http://losangeles.craigslist.org/search/apa']
-
 lookback = 1  # hours
-print(lookback)
 earliest_ts = dt.now() - timedelta(hours=lookback)
 latest_ts = dt.now() + timedelta(hours=0)
 ts = dt.now().strftime('%Y%m%d-%H%M%S')
@@ -53,13 +53,24 @@ for i, job in enumerate(jobs):
 
 # archive the data and delete the raw files
 print("Archiving data.")
-
-shutil.make_archive('/home/mgardner/scraper2/archives/rental_listings-' + ts,
+filepath = '/home/mgardner/scraper2/archives/'
+archive_name = 'rental_listings-' + ts
+shutil.make_archive(filepath + archive_name,
                     'zip', '/home/mgardner/scraper2/data')
+archiveSize = np.round(os.path.getsize(
+    filepath + archive_name + '.zip') / 1e3, 2)
 
-### SLACK INTEGRATION HERE BASED ON FILE SIZE OF ARCHIVE
-[os.remove(x) for x in glob.glob("/home/mgardner/scraper2/data/*" +
-                                 ts + ".csv")]
+token_dict = json.load(open('/home/mgardner/scraper2/slack_token.json', 'rb'))
+slack_token = token_dict['slack']
+sc = SlackClient(slack_token)
+
+sc.api_call(
+    "chat.postMessage",
+    channel="#craigslist-scraper",
+    text="Archive created: {0} -- {1} KB".format(
+        archive_name + '.zip', archiveSize))
+
+[os.remove(x) for x in glob.glob("/home/mgardner/scraper2/data/*")]
 
 # run the sync script to send the archive to box, delete local copy of archive
 p = subprocess.Popen(['. /home/mgardner/scraper2/sync_data.sh'], shell=True,

@@ -63,8 +63,8 @@ class RentalListingScraper(object):
         self.s3_bucket = s3_bucket
         self.ts = fname_ts  # Use timestamp as file id
         self.proxies = {
-                            'http': 'http://87783015bbe2d2f900e2f8be352c414a:@workdistribute.charityengine.com:20000',
-                            'https': 'https://87783015bbe2d2f900e2f8be352c414a:@workdistribute.charityengine.com:20000'
+                            'http': 'http://87783015bbe2d2f900e2f8be352c414a:@charityengine.services:20000',
+                            'https': 'https://87783015bbe2d2f900e2f8be352c414a:@charityengine.services:20000'
                         }
 
         log_fname = '/home/mgardner/scraper2/logs/' + self.fname_base \
@@ -164,15 +164,13 @@ class RentalListingScraper(object):
         #     s.proxies = {'http': proxy_str, 'https': proxy_str}
         #     s.auth = HTTPProxyAuth(authenticator,'') 
         proxies = {
-                  'http': 'http://87783015bbe2d2f900e2f8be352c414a:@workdistribute.charityengine.com:20000',
-                  'https': 'https://87783015bbe2d2f900e2f8be352c414a:@workdistribute.charityengine.com:20000'
+                  'http': 'http://87783015bbe2d2f900e2f8be352c414a:foo@charityengine.services:20000',
+                  'https': 'https://87783015bbe2d2f900e2f8be352c414a:foo@charityengine.services:20000'
                 }
         try:
             page = requests.get(url, timeout=30, proxies=proxies, verify=False)
-            # page = requests.get(url, timeout=30, verify=False)
         except:
             page = requests.get(url, timeout=30, proxies=proxies, verify=False)
-            # page = requests.get(url, timeout=30, verify=False)
             
         tree = html.fromstring(page.content)
         try:
@@ -323,8 +321,8 @@ class RentalListingScraper(object):
                         
                     #     # s.auth = HTTPProxyAuth(authenticator,'')
                     proxies = {
-                          'http': 'http://87783015bbe2d2f900e2f8be352c414a:@workdistribute.charityengine.com:20000',
-                          'https': 'https://87783015bbe2d2f900e2f8be352c414a:@workdistribute.charityengine.com:20000'
+                          'http': 'http://87783015bbe2d2f900e2f8be352c414a:@charityengine.services:20000',
+                          'https': 'https://87783015bbe2d2f900e2f8be352c414a:@charityengine.services:20000'
                         }
 
                     try:
@@ -378,13 +376,12 @@ class RentalListingScraper(object):
                                 if listing_num == 1:
                                     logging.info('NO LISTINGS BEFORE TIMESTAMP CUTOFF AT {0}'.format(str.upper(regionName)))    
                                 else:
-                                    logging.info('REACHED TIMESTAMP CUTOFF')
+                                    logging.info('REACHED TIMESTAMP CUTOFF FOR {0}'.format(str.upper(regionName)))
                                 ts_skipped += 1
                                 regionIsComplete = True
                                 break 
                     
-                            item_url = domain.split('/search')[0] + row[2]
-                            row[2] = item_url
+                            item_url = row[2]
 
                             # Parse listing page to get lat-lng
                             logging.info(item_url)
@@ -406,17 +403,21 @@ class RentalListingScraper(object):
                         search_url = domain.split('/search')[0] + next[0]
                     else:
                         regionIsComplete = True
-                        logging.info('RECEIVED ERROR PAGE')
+                        logging.info('RECEIVED ERROR PAGE for {0}'.format(str.upper(regionName)))
 
             
             # print ts_skipped
             # SLACK WARNING HERE
             if ts_skipped == total_listings:
+                try:
+                    item_ts = str(item_ts)
+                except NameError:
+                    item_ts = "no timestamp scraped"
                 logging.info(('{0} TIMESTAMPS NOT MATCHING' +
                              ' - CL: {1} vs. UAL: {2}.' +
                              ' NO DATA SAVED.').format(
                                  regionName,
-                                 str(item_ts),
+                                 item_ts,
                                  str(self.latest_ts)))
                 continue
 
