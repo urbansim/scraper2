@@ -57,18 +57,18 @@ filepath = '/home/mgardner/scraper2/archives/'
 archive_name = 'rental_listings-' + ts
 shutil.make_archive(filepath + archive_name,
                     'zip', '/home/mgardner/scraper2/data')
-archiveSize = np.round(os.path.getsize(
-    filepath + archive_name + '.zip') / 1e3, 2)
+# archiveSize = np.round(os.path.getsize(
+#     filepath + archive_name + '.zip') / 1e3, 2)
 
-token_dict = json.load(open('/home/mgardner/scraper2/slack_token.json', 'rb'))
-slack_token = token_dict['slack']
-sc = SlackClient(slack_token)
+# token_dict = json.load(open('/home/mgardner/scraper2/slack_token.json', 'rb'))
+# slack_token = token_dict['slack']
+# sc = SlackClient(slack_token)
 
-sc.api_call(
-    "chat.postMessage",
-    channel="#craigslist-scraper",
-    text="Archive created: {0} -- {1} KB".format(
-        archive_name + '.zip', archiveSize))
+# sc.api_call(
+#     "chat.postMessage",
+#     channel="#craigslist-scraper",
+#     text="Archive created: {0} -- {1} KB".format(
+#         archive_name + '.zip', archiveSize))
 
 [os.remove(x) for x in glob.glob("/home/mgardner/scraper2/data/*")]
 
