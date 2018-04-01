@@ -4,11 +4,12 @@ from datetime import timedelta
 import logging
 import urllib
 import unicodecsv as csv
-from lxml import html
+from lxml import html, etree
 import requests
 import time
 import sys
 from requests.auth import HTTPProxyAuth
+from requests.exceptions import Timeout, ConnectionError, ProxyError
 import pandas as pd
 import numpy as np
 import json
@@ -32,7 +33,7 @@ DOMAINS = ['http://sfbay.craigslist.org','http://modesto.craigslist.org/search/a
 EARLIEST_TS = dt.now() - timedelta(hours=0.25)
 LATEST_TS = dt.now()
 
-OUT_DIR = '/home/mgardner/scraper2/data/'
+OUT_DIR = '/home/urbansim_service_account/scraper2/data/'
 FNAME_BASE = 'data-'  # filename prefix for saved data
 FNAME_TS = True  # append timestamp to filename
 
@@ -63,13 +64,13 @@ class RentalListingScraper(object):
         self.s3_bucket = s3_bucket
         self.ts = fname_ts  # Use timestamp as file id
         self.proxies = {
-                            'http': 'http://87783015bbe2d2f900e2f8be352c414a:@charityengine.services:20000',
-                            'https': 'https://87783015bbe2d2f900e2f8be352c414a:@charityengine.services:20000'
+                            'http': 'http://87783015bbe2d2f900e2f8be352c414a:foo@charityengine.services:20000',
+                            'https': 'https://87783015bbe2d2f900e2f8be352c414a:foo@charityengine.services:20000'
                         }
 
-        log_fname = '/home/mgardner/scraper2/logs/' + self.fname_base \
+        log_fname = '/home/urbansim_service_account/scraper2/logs/' + self.fname_base \
                 + (self.ts if self.fname_ts else '') + '.log'
-        logging.basicConfig(filename=log_fname, level=logging.INFO)
+        logging.basicConfig(filename=log_fname, level=logging.WARNING)
         
         # Suppress info messages from the 'requests' library
         logging.getLogger('requests').setLevel(logging.WARNING)  
@@ -114,30 +115,34 @@ class RentalListingScraper(object):
         Note that xpath() returns a list with elements of varying types depending on the
         query results: xml objects, strings, etc.
         '''
-        pid = item.xpath('@data-pid')[0]  # post id, always present
-        info = item.xpath('p[@class="result-info"]')[0]
-        dt = info.xpath('time/@datetime')[0]
-        url = info.xpath('a/@href')[0]
-        if type(info.xpath('a/text()')) == str:
-            title = info.xpath('a/text()')
-        else:
-            title = info.xpath('a/text()')[0]
-        price = self._get_str(info.xpath('span[@class="result-meta"]/span[@class="result-price"]/text()')).strip('$')
-        neighb_raw = info.xpath('span[@class="result-meta"]/span[@class="result-hood"]/text()')
-        if len(neighb_raw) == 0:
-            neighb = ''
-        else:
-            neighb = neighb_raw[0].strip(" ").strip("(").strip(")")
-        housing_raw = info.xpath('span[@class="result-meta"]/span[@class="housing"]/text()')
-        if len(housing_raw) == 0:
-            beds = 0
-            sqft = 0
-        else:
-            bedsqft = housing_raw[0]
-            beds = self._get_int_prefix(bedsqft, "br")  # appears as "1br" to "8br" or missing
-            sqft = self._get_int_prefix(bedsqft, "ft")  # appears as "000ft" or missing
-        
-        return [pid, dt, url, title, price, neighb, beds, sqft]
+        try:
+            pid = item.xpath('@data-pid')[0]  # post id, always present
+            info = item.xpath('p[@class="result-info"]')[0]
+            dt = info.xpath('time/@datetime')[0]
+            url = info.xpath('a/@href')[0]
+            if type(info.xpath('a/text()')) == str:
+                title = info.xpath('a/text()')
+            else:
+                title = info.xpath('a/text()')[0]
+            price = self._get_str(info.xpath('span[@class="result-meta"]/span[@class="result-price"]/text()')).strip('$')
+            neighb_raw = info.xpath('span[@class="result-meta"]/span[@class="result-hood"]/text()')
+            if len(neighb_raw) == 0:
+                neighb = ''
+            else:
+                neighb = neighb_raw[0].strip(" ").strip("(").strip(")")
+            housing_raw = info.xpath('span[@class="result-meta"]/span[@class="housing"]/text()')
+            if len(housing_raw) == 0:
+                beds = 0
+                sqft = 0
+            else:
+                bedsqft = housing_raw[0]
+                beds = self._get_int_prefix(bedsqft, "br")  # appears as "1br" to "8br" or missing
+                sqft = self._get_int_prefix(bedsqft, "ft")  # appears as "000ft" or missing
+            
+            return [pid, dt, url, title, price, neighb, beds, sqft]
+        except etree.XMLSyntaxError, e:
+            logging.warning('XMLSyntaxError parsing main listing data at {0}: {1}'.format(url, str(e)))
+            return None
         
 
     def _parseAddress(self, tree):
@@ -145,8 +150,12 @@ class RentalListingScraper(object):
         Some listings include an address, but we have to parse it out of an encoded
         Google Maps url.
         '''
-        url = self._get_str(tree.xpath('//p[@class="mapaddress"]/small/a/@href'))
-        
+        try:
+            url = self._get_str(tree.xpath('//p[@class="mapaddress"]/small/a/@href'))
+        except etree.XMLSyntaxError, e:
+            logging.debug('XMLSyntaxError at parsing address from map at {0}: {1}'.format(url, str(e)))
+            return ''
+
         if '?q=loc' not in url:
             # That string precedes an address search
             return ''
@@ -155,46 +164,68 @@ class RentalListingScraper(object):
 
     
     def _scrapeLatLng(self, url, proxy=True):
-    
-        # s = session
-        # if proxy:
-        #     requests.packages.urllib3.disable_warnings()
-        #     authenticator = '87783015bbe2d2f900e2f8be352c414a'
-        #     proxy_str = 'http://' + authenticator + '@' +'workdistribute.charityengine.com:20000'
-        #     s.proxies = {'http': proxy_str, 'https': proxy_str}
-        #     s.auth = HTTPProxyAuth(authenticator,'') 
+        
         proxies = {
                   'http': 'http://87783015bbe2d2f900e2f8be352c414a:foo@charityengine.services:20000',
                   'https': 'https://87783015bbe2d2f900e2f8be352c414a:foo@charityengine.services:20000'
                 }
         try:
-            page = requests.get(url, timeout=30, proxies=proxies, verify=False)
+            page = requests.get(url, timeout=45, proxies=proxies, verify=False) # was 30
         except:
-            page = requests.get(url, timeout=30, proxies=proxies, verify=False)
-            
-        tree = html.fromstring(page.content)
+            time.sleep(2)
+            try:
+                page = requests.get(url, timeout=45, proxies=proxies, verify=False) # was 30
+            except ConnectionError, e:
+                logging.debug('ConnectionError at {0}: {1}'.format(url, str(e)))
+                return 'connection_errors'
+            except ProxyError, e:
+                logging.debug('ProxyError at {0}: {1}'.format(url, str(e)))
+                return 'proxy_errors'
+            except etree.XMLSyntaxError, e:
+                logging.debug('XMLSyntaxError at {0}: {1}'.format(url, str(e)))
+                return 'xml_syntax_errors'
+            except Timeout, e:
+                logging.debug('Timeout at {0}: {1}'.format(url, str(e)))
+                return 'timeout_errors'
+
+        try:
+            tree = html.fromstring(page.content)
+        except etree.XMLSyntaxError, e:
+            logging.debug('XMLSyntaxError at {0}: {1}'.format(url, str(e)))
+            return 'xml_syntax_errors'
         try:
             baths = tree.xpath('//div[@class="mapAndAttrs"]/p[@class="attrgroup"]/span/b')[1].text[:-2]
         except:
             baths = ''
-        map = tree.xpath('//div[@id="map"]')
 
-        # Sometimes there's no location info, and no map on the page        
+        # Sometimes there's no location info, and no map on the page
+        try:            
+            map = tree.xpath('//div[@id="map"]')
+        except etree.XMLSyntaxError, e:
+            logging.debug('XMLSyntaxError at {0}: {1}'.format(url, str(e)))
+            return 'xml_syntax_errors'
+
         if len(map) == 0:
-            return [baths,'', '', '', '']
+            return 'xml_syntax_errors'
+        try:
+            map = map[0]
+            lat = map.xpath('@data-latitude')[0]
+            lng = map.xpath('@data-longitude')[0]
+            accuracy = map.xpath('@data-accuracy')[0]
+            address = self._parseAddress(tree)
+            return [baths, lat, lng, accuracy, address]
 
-        map = map[0]
-        lat = map.xpath('@data-latitude')[0]
-        lng = map.xpath('@data-longitude')[0]
-        accuracy = map.xpath('@data-accuracy')[0]
-        address = self._parseAddress(tree)
-        
-        return [baths, lat, lng, accuracy, address]
+        except etree.XMLSyntaxError, e:
+            logging.debug('XMLSyntaxError at {0}: {1}'.format(url, str(e)))
+            return 'xml_syntax_errors'
 
 
     def _get_fips(self, row):
 
-            url = 'http://data.fcc.gov/api/block/find?format=json&latitude={}&longitude={}'
+            # old api
+            # url = 'http://data.fcc.gov/api/block/find?format=json&latitude={}&longitude={}'
+            # new api
+            url = 'https://geo.fcc.gov/api/census/block/find?latitude={}&longitude={}&format=json'
             request = url.format(row['latitude'], row['longitude'])
 
             # TO DO: exception handling
@@ -222,21 +253,19 @@ class RentalListingScraper(object):
 
         if len(all_listings) == 0:
             return [], 0, 0, 0
-        # print('{0} total listings'.format(len(all_listings)))
         all_listings = all_listings.rename(columns={'price':'rent', 'dt':'date', 'beds':'bedrooms', 'neighb':'neighborhood',
                                                     'baths':'bathrooms','lng':'longitude', 'lat':'latitude'})
         all_listings['rent_sqft'] = all_listings['rent'] / all_listings['sqft']
         all_listings['date'] = pd.to_datetime(all_listings['date'], format='%Y-%m-%d')
         all_listings['day_of_week'] = all_listings['date'].apply(lambda x: x.weekday())
-        all_listings['region'] = all_listings['url'].str.extract('http://(.*).craigslist.org', expand=False)
+        all_listings['region'] = all_listings['url'].str.extract('https://(.*).craigslist.org', expand=False)
         unique_listings = pd.DataFrame(all_listings.drop_duplicates(subset='pid', inplace=False))
         thorough_listings = pd.DataFrame(unique_listings)
         thorough_listings = thorough_listings[thorough_listings['rent'] > 0]
         thorough_listings = thorough_listings[thorough_listings['sqft'] > 0]
         if len(thorough_listings) == 0:
-            return [], 0, 0, 0
+            return [], len(all_listings), 0, 0
 
-        # print('{0} thorough listings'.format(len(thorough_listings)))
         geolocated_filtered_listings = pd.DataFrame(thorough_listings)
         geolocated_filtered_listings = geolocated_filtered_listings[pd.notnull(geolocated_filtered_listings['latitude'])]
         geolocated_filtered_listings = geolocated_filtered_listings[pd.notnull(geolocated_filtered_listings['longitude'])]
@@ -248,20 +277,19 @@ class RentalListingScraper(object):
         fips = data_output.apply(self._get_fips, axis=1)             
         geocoded = pd.concat([data_output, fips], axis=1)
 
-        # print('{0} geocoded listings'.format(len(geocoded)))
         return geocoded, len(all_listings), len(thorough_listings), len(geocoded)
 
     def _write_db(self, dataframe, domain):
         dbname = 'craigslist'
         host='localhost'
         port=5432
-        username='mgardner'
-        passwd='Gardner0942'
+        username='cl_user'
+        passwd='my-friend-craig'
         conn_str = "dbname={0} user={1} host={2} password={3} port={4}".format(dbname,username,host,passwd,port)
         conn = psycopg2.connect(conn_str)
         cur = conn.cursor()
         num_listings = len(dataframe)
-        # print("Inserting {0} listings from {1} into database.".format(num_listings, domain))
+        print("------Inserting {0} listings from {1} into database.------".format(num_listings, domain))
         prob_PIDs = []
         dupes = []
         writes = []
@@ -292,17 +320,39 @@ class RentalListingScraper(object):
                         'lat','lng','accuracy','address']
         st_time = time.time()
 
-        # Loop over each regional Craigslist URL
+        # Loop over each regional Craigslist URL (only one if processing in parallel)
         for i, domain in enumerate(self.domains):
 
+            msg = None
+
+            # flags for logging
+            neverConnected = True
+            neverParsed = True
+
+            # counters
+            attempt_mainpage_connect = 0
+            attempt_mainpage_parse = 0
+            page_num = 0
+            rows_written = 0
+            ts_skipped = 0
             total_listings = 0
             listing_num = 0
-            ts_skipped = 0
+
+            listing_level_error_dict = {
+                'main_data_parsing_errors': 0,
+                'aux_data_parsing_errors': 0,
+                'connection_errors': 0,
+                'timeout_errors': 0,
+                'proxy_errors': 0,
+                'xml_syntax_errors': 0
+            }
 
             regionName = domain.split('//')[1].split('.craigslist')[0]
             regionIsComplete = False
+            
+            
             search_url = domain
-            logging.info('BEGINNING NEW REGION')
+            logging.debug('BEGINNING NEW REGION: {0}'.format(str.upper(regionName)))
 
             fname = self.out_dir + regionName + '-' \
                 + (self.ts if self.fname_ts else '') + '.csv'
@@ -310,118 +360,276 @@ class RentalListingScraper(object):
             with open(fname, 'wb') as f:
                 writer = csv.writer(f)
                 writer.writerow(colnames)
-
+                
+                # scroll through main listing pages
                 while not regionIsComplete:
+                    page_num += 1
 
-                    logging.info(search_url)
-                    # s = requests.Session()
-
-                    # if charity_proxy:
-                    #     requests.packages.urllib3.disable_warnings()
-                        
-                    #     # s.auth = HTTPProxyAuth(authenticator,'')
                     proxies = {
-                          'http': 'http://87783015bbe2d2f900e2f8be352c414a:@charityengine.services:20000',
-                          'https': 'https://87783015bbe2d2f900e2f8be352c414a:@charityengine.services:20000'
+                          'http': 'http://87783015bbe2d2f900e2f8be352c414a:foo@charityengine.services:20000',
+                          'https': 'https://87783015bbe2d2f900e2f8be352c414a:foo@charityengine.services:20000'
                         }
 
-                    try:
-                        
-                        page = requests.get(search_url, proxies=proxies, timeout=30, verify=False)
-                        # page = requests.get(search_url, timeout=30, verify=False)
-                    except requests.exceptions.Timeout:
-                        # s = requests.Session()
-                        # if charity_proxy:
-                        #     s.proxies = {
-                        #         'http': 'http://87783015bbe2d2f900e2f8be352c414a:@workdistribute.charityengine.com:20000',
-                        #         'https': 'https://87783015bbe2d2f900e2f8be352c414a:@workdistribute.charityengine.com:20000'
-                        #     }
-                        #     # s.auth = HTTPProxyAuth(authenticator,'')
+                    # we get 3 tries to connect to a main page
+                    if attempt_mainpage_connect < 2:
                         try:
-                            page = requests.get(search_url, proxies=proxies, timeout=30, verify=False)
-                            # page = requests.get(search_url, timeout=30, verify=False)
+                            attempt_mainpage_connect += 1
+                            page = requests.get(search_url, proxies=proxies, timeout=45, verify=False) # was 30
                         except:
-                            regionIsComplete = True
-                            logging.info('FAILED TO CONNECT.')
+                            time.sleep(2)
+                            continue
 
-                    try:
-                        tree = html.fromstring(page.content)
-                    except:
-                        regionIsComplete = True
-                        logging.info('FAILED TO PARSE HTML.')
+                    # last (third) try        
+                    else:
+                        try:
+                            attempt_mainpage_connect += 1
+                            page = requests.get(search_url, proxies=proxies, timeout=45, verify=False)
 
-                    listings = tree.xpath('//li[@class="result-row"]')
+                        # if connection fails a third time, try to catch and log the exception,
+                        # and break the loop. Only raise a warning if the connection has not
+                        # previously made it past this point.
+                        except Timeout, e:
+                            msg = 'FAILED TO CONNECT TO {0} WITH TIMEOUT AFTER {1} TRIES.'.format(
+                                str.upper(regionName), attempt_mainpage_connect)
+                            if neverConnected:
+                                logging.warning(msg)
+                            else: 
+                                logging.debug(msg)
+                            break
+                        except ConnectionError, e:
+                            msg = 'FAILED TO CONNECT TO {0} WITH CONNECTION ERROR AFTER {1} TRIES.'.format(
+                                str.upper(regionName), attempt_mainpage_connect)
+                            if neverConnected:
+                                logging.warning(msg)
+                            else: 
+                                logging.debug(msg)
+                            break
+                        except ProxyError, e:
+                            msg = 'FAILED TO CONNECT TO {0} WITH PROXY ERROR AFTER {1} TRIES.'.format(
+                                str.upper(regionName), attempt_mainpage_connect)
+                            if neverConnected:
+                                logging.warning(msg)
+                            else: 
+                                logging.debug(msg)
+                            break
+                        except Exception, e:
+                            msg = 'FAILED TO CONNECT TO {0} WITH UNKNOWN ERROR AFTER {1} TRIES: {2}'.format(
+                                str.upper(regionName), attempt_mainpage_connect, str(e))
+                            if neverConnected:
+                                logging.warning(msg)
+                            else: 
+                                logging.debug(msg)
+                            break
+                    
+                    # at this point, we will need to log more errors so we set this flag to false
+                    # and use it to trigger warnings below. If it breaks above, neverConnected is True.
+                    neverConnected = False
 
-                    ### TO DO: Need better way to check for HTML changes in Craigslist 
-                    if len(listings) == 0 and total_listings == 0:
-                        logging.info('NO LISTINGS RETRIEVED FOR {0}'.format(str.upper(regionName)))
+                    # we get 3 tries to parse a main page
+                    if attempt_mainpage_parse < 2:
+                        try:
+                            attempt_mainpage_parse += 1
+                            tree = html.fromstring(page.content)
+                            listings = tree.xpath('//li[@class="result-row"]')
+                        except:
+                            continue
+
+                    else:
+                        # last (third) try        
+                        try:
+                            tree = html.fromstring(page.content)
+                            listings = tree.xpath('//li[@class="result-row"]')
+
+                        # if parsing fails a third time, try to catch and log the exception,
+                        # and break the loop. Only raise a warning if parsing has not
+                        # previously made it past this point.
+                        except Exception, e:
+                            if neverParsed:
+                                msg = 'NEVER PARSED HTML FOR {0}. {1}: {2}'.format(
+                                    str.upper(regionName), type(e).__name__, e)
+                                logging.warning(msg)
+
+                            else:
+                                msg = 'FAILED TO PARSE HTML FOR {0} PAGE {1}. {2}: {3}'.format(
+                                    str.upper(regionName), str(page_num), type(e).__name__, e)
+                                logging.debug(msg)
+                            break
+
+                    # at this point, we will need to log more errors so we set this flag to false
+                    # and use it to trigger warnings below. If it breaks above, neverParsed is True.
+                    neverParsed = False
+
+                    # if there are no listings on the page, break the loop with an info-level log message
+                    if len(listings) == 0:
+                        logging.debug('PARSED HTML BUT FOUND 0 LISTINGS FOR {0} AT PAGE {1}'.format(
+                            str.upper(regionName), str(page_num)))
+                        break
 
                     total_listings += len(listings)
-                    
 
                     for item in listings:
 
                         listing_num += 1
                         try:
                             row = self._parseListing(item)
+
+                            if row is None:
+                                listing_level_error_dict['main_data_parsing_errors'] += 1
+                                continue
+
                             item_ts = dt.strptime(row[1], '%Y-%m-%d %H:%M')
-                
-                            if (item_ts > self.latest_ts):
-                                # Skip this item but continue parsing search results
-                                ts_skipped += 1
-                                continue
-
-                            if (item_ts < self.earliest_ts):
-                                # Break out of loop and move on to the next region
-                                if listing_num == 1:
-                                    logging.info('NO LISTINGS BEFORE TIMESTAMP CUTOFF AT {0}'.format(str.upper(regionName)))    
-                                else:
-                                    logging.info('REACHED TIMESTAMP CUTOFF FOR {0}'.format(str.upper(regionName)))
-                                ts_skipped += 1
-                                regionIsComplete = True
-                                break 
-                    
-                            item_url = row[2]
-
-                            # Parse listing page to get lat-lng
-                            logging.info(item_url)
-
-                            try:
-                                row += self._scrapeLatLng(item_url)
-                                writer.writerow(row)
-                            except Exception, e:
-                                logging.warning("{0}: {1}. Couldn't scrape lat/lon/baths at {2}".format(type(e).__name__, e,item_url))
-                                continue
 
                         except Exception, e:
-                            # Skip listing if there are problems parsing it
-                            logging.warning("{0}: {1}. Probably no beds/sqft info".format(type(e).__name__, e))
+                            msg = "Unknown error parsing main listing data at {2}. {0}: {1}.".format(type(e).__name__, e, regionName)
+                            logging.warning(msg)
+                            listing_level_error_dict['main_data_parsing_errors'] += 1
                             continue
-                    
-                    next = tree.xpath('//a[@title="next page"]/@href')
-                    if len(next) > 0:
-                        search_url = domain.split('/search')[0] + next[0]
-                    else:
-                        regionIsComplete = True
-                        logging.info('RECEIVED ERROR PAGE for {0}'.format(str.upper(regionName)))
+                
+                        if (item_ts > self.latest_ts):
+
+                            # Skip this item bc it was posted after end of timestamp cutoff
+                            # but keep scrolling back in time
+                            ts_skipped += 1
+                            continue
+
+                        elif (item_ts < self.earliest_ts):
+
+                            # Break out of loop and move on to the next region
+                            msg = 'REACHED TIMESTAMP CUTOFF FOR {0}'.format(str.upper(regionName))
+                            logging.debug(msg)
+                            regionIsComplete = True
+                            break 
+                
+                        item_url = row[2]
+
+                        # Parse listing page to get lat/lng if no problems with above parsing
+                        try:
+                            more_row = self._scrapeLatLng(item_url)
+                            if type(more_row) == str:
+                                # locals()[more_row] += 1  # i'm not sure this little trick is working
+                                listing_level_error_dict[more_row] += 1
+                            else:
+                                writer.writerow(row + more_row)
+                                rows_written += 1
+
+                        except Exception, e:
+
+                            # these should almost always get caught by _scrapeLatLng()
+                            msg = "Unknown error scraping lat/lon/baths at {2}. {0}: {1}.".format(type(e).__name__, e, item_url)
+                            logging.warning(msg)
+                            listing_level_error_dict['aux_data_parsing_errors'] += 1
+                            continue
+
+                    # if we haven't completed the region, i.e. there may still
+                    # be more listings in our time window, look for the next page button
+                    if not regionIsComplete:
+                        next = tree.xpath('//a[@title="next page"]/@href')
+
+                        if len(next) > 0:
+
+                            if len(next[0]) > 0:
+                                search_url = domain.split('/search')[0] + next[0]
+
+                            # if href attribute is empty, there are no more listings
+                            else:
+                                regionIsComplete = True    
+                                logging.debug('REACHED END OF LISTINGS AT {0}'.format(str.upper(regionName)))
+                        
+                        # if we cant find the next button at all, there is a real problem!
+                        else:
+                            logging.error('NO NEXT BUTTON FOUND FOR {0}'.format(str.upper(regionName)))
+                            break
 
             
-            # print ts_skipped
-            # SLACK WARNING HERE
-            if ts_skipped == total_listings:
-                try:
-                    item_ts = str(item_ts)
-                except NameError:
-                    item_ts = "no timestamp scraped"
-                logging.info(('{0} TIMESTAMPS NOT MATCHING' +
-                             ' - CL: {1} vs. UAL: {2}.' +
-                             ' NO DATA SAVED.').format(
-                                 regionName,
-                                 item_ts,
-                                 str(self.latest_ts)))
-                continue
+            # never wrote any rows to .csv. this won't break the cleaning
+            # but we should still skip the cleaning process and delete the
+            # empty .csv. first we try to identify all legitimate reasons
+            # for having zero rows and create log messages for cases that
+            # would not have been caught above
 
+            if rows_written == 0:
 
+                # if regionIsComplete, either reached the timestamp cutoff
+                # or no next button found, both of which are handled above.
+                if regionIsComplete:
+                    continue
+
+                # never connected to a main page, error should be caught above
+                # with FAILED TO CONNECT message
+                elif neverConnected:
+                    continue
+
+                # never parsed a main page HTML, error should be caught above
+                # with FAILED TO PARSE message
+                elif neverParsed:
+                    continue
+
+                # 0 rows were written and region is not complete even though
+                # we connected, parsed a main page, and found listings.
+                # This could indicate a major issue
+                elif total_listings > 0:
+
+                    # all listings skipped due to timestamp issues. this is
+                    # typically due to a timezone issue
+                    if ts_skipped == total_listings:
+                        logging.error(('100% OF LISTINGS ARE TOO NEW AT {0}. EARLIEST LISTING' +
+                            ' ({2}) > RUN CUTOFF ({1}). CHECK THE TIMEZONE!!!').format(
+                             str.upper(regionName),
+                             str(self.latest_ts.strftime('%H:%M')),
+                             str(item_ts)))
+                        continue
+
+                    # no new listings in time window of interest
+                    elif listing_num == 1:
+                        msg = 'NO NEW LISTINGS AT {0}'.format(str.upper(regionName))
+                        logging.info(msg)
+                        continue
+
+                    # if it's not a timezone issue, it must be a parsing issue. these should
+                    # all be getting logged at the INFO level above, but here we log an
+                    # error-level message for the entire region with the counts of the error types.
+                    else:
+                        logging.error(('0 LISTINGS WRITTEN TO CSV AT {0} EVEN THOUGH WE ' +
+                            'FOUND {7}: {1} CONNECTION ERRORS, {2} PROXY ERRORS' +
+                            ' {3} TIMEOUT ERRORS, {4} XML SYNTAX ERRORS, {5} MAIN PARSING ERRORS,' +
+                            ' {6} AUX PARSING ERRORS').format(
+                            str.upper(regionName), str(listing_level_error_dict['connection_errors']),
+                            str(listing_level_error_dict['proxy_errors']),
+                            str(listing_level_error_dict['timeout_errors']),
+                            str(listing_level_error_dict['xml_syntax_errors']),
+                            str(listing_level_error_dict['main_data_parsing_errors']),
+                            str(listing_level_error_dict['aux_data_parsing_errors']),
+                            total_listings))
+                        continue
+
+                # if not never connected and not never parsed and region is not complete
+                # but 0 rows were written bc found 0 total listings, this means the while
+                # loop always broke before iterating through items (line 462)
+                else:
+                    logging.warning(('NO LISTINGS WRITTEN TO CSV AT {0} BC ' +
+                        'WE FOUND 0 AFTER PARSING MAIN PAGE.').format(str.upper(regionName)))
+                    continue
+
+            # if rows were written, we won't skip cleaning but we still want to log errors if there
+            # were a significant amount
+            else:
+                pct_rows_written = round(rows_written / (listing_num - ts_skipped) * 100, 1)
+                msg = ('{7} LISTINGS WRITTEN TO CSV ({8}%) AT {0}: {1} CONNECTION ERRORS, {2} PROXY ERRORS,' +
+                        ' {3} TIMEOUT ERRORS, {4} XML SYNTAX ERRORS, {5} MAIN PARSING ERRORS,' + 
+                        ' {6} AUX PARSING ERRORS').format(
+                            str.upper(regionName), str(listing_level_error_dict['connection_errors']),
+                            str(listing_level_error_dict['proxy_errors']),
+                            str(listing_level_error_dict['timeout_errors']),
+                            str(listing_level_error_dict['xml_syntax_errors']),
+                            str(listing_level_error_dict['main_data_parsing_errors']),
+                            str(listing_level_error_dict['aux_data_parsing_errors']),
+                            str(rows_written), str(pct_rows_written))
+                if pct_rows_written < 75 and (listing_num - ts_skipped) > 10:
+                    logging.warning(msg)
+                elif any(listing_level_error_dict.values()):
+                    logging.info(msg)
+
+            # process the results!
             cleaned, count_listings, count_thorough, count_geocoded = self._clean_listings(fname)
             num_cleaned = len(cleaned)
 
@@ -431,24 +639,37 @@ class RentalListingScraper(object):
                 num_dupes = len(dupes)
                 num_writes = len(writes)
                 assert num_probs + num_dupes + num_writes == num_cleaned 
-                pct_written = (num_writes) / num_cleaned * 100
-                pct_fail = round(num_probs / num_cleaned * 100,3)
 
                 if num_dupes == num_cleaned:
-                    logging.info('100% OF {0} PIDS ARE DUPES. NOTHING WRITTEN'.format(str.upper(regionName)))
+
+                    # no db writes completed bc they were all dupes
+                    logging.info('0 {0} PIDS WRITTEN TO DB. 100% ARE DUPLICATES'.format(str.upper(regionName)))
 
                 elif num_writes + num_dupes == num_cleaned:
-                    logging.info('100% OF {0} PIDS WRITTEN.'.format(str.upper(regionName)) + 
+
+                    # all db writes completed besides dupes
+                    logging.info('{0} {1} PIDS (100%) WRITTEN TO DB.'.format(str(num_writes), str.upper(regionName)) + 
                                  ' {0} scraped, {1} w/ rent/sqft, {2} w/ lat/lon, {3} dupes'.format(
                                     count_listings, count_thorough, count_geocoded, num_dupes))
                 
                 else:
-                    logging.info('FAILED TO WRITE {0}% OF {1} PIDS:'.format(pct_fail,str.upper(regionName)) + ', '.join(probs))
+                    pct_written = round(num_writes / (num_cleaned - num_dupes) * 100, 3)
+                    # db writes failed for reasons other than dupes
+                    logging.info('{0} {1} PIDS ({2}%) WRITTEN TO DB. THESE PIDS FAILED: '.format(
+                        str(num_writes), str.upper(regionName), pct_written) + ', '.join(probs))
 
             else:
-                logging.info('NO CLEAN LISTINGS FOR {0}:'.format(str.upper(regionName)) + 
-                             ' {0} scraped, {1} w/ rent/sqft, {2} w/ lat/lon.'.format(
-                                count_listings, count_thorough, count_geocoded))
+
+                # problem reading individual region .csv THIS SHOULD NEVER HAPPEN
+                if count_listings == 0:
+                    logging.error('ERROR AT {0}. {1} ROWS WRITTEN TO {2} BUT NONE READ BY CLEANER.'.format(
+                        str.upper(regionName), str(rows_written), fname))
+
+                # read rows from .csv but none of them met cleaning criteria
+                else:
+                    logging.info('0 {0} PIDS WRITTEN TO DB. PARSED LISTINGS BUT NONE COULD BE CLEANED:'.format(str.upper(regionName)) + 
+                                 ' {0} scraped, {1} w/ rent/sqft, {2} w/ lat/lon.'.format(
+                                    count_listings, count_thorough, count_geocoded))
 
         return
 
