@@ -11,6 +11,10 @@ import json
 from scraper2 import scraper2
 from slackclient import SlackClient
 import boto
+import pytz.reference
+# import requests
+# from requests.exceptions import ConnectionError
+import logging
 
 
 domains = []
@@ -21,26 +25,105 @@ with open('/home/urbansim_service_account/scraper2/domains.txt', 'rb') as f:
         domains.append((line.strip()))
 
 # For testing
-# domains = ['https://santabarbara.craigslist.org/search/apa']
-# domains = ['https://dothan.craigslist.org/search/apa', 'https://santabarbara.craigslist.org/search/apa']
-# domains = ['https://micronesia.craigslist.org/search/apa']
+# domains = ['http://santabarbara.craigslist.org/search/apa']
+# domains = ['http://dothan.craigslist.org/search/apa', 'http://santabarbara.craigslist.org/search/apa']
+# domains = ['http://micronesia.craigslist.org/search/apa']
 # domains = ['http://swv.craigslist.org/search/apa']
 # domains = ['http://ashtabula.craigslist.org/search/apa']
-# domains = ['http://saltlakecity.craigslist.org/search/apa']
+# domains = ['http://honolulu.craigslist.org/search/apa']
+# domains = ['http://atlanta.craigslist.org/search/apa']
+# domains = ['http://toronto.craigslist.org/search/apa']
 
 lookback = 1  # hours
-earliest_ts = dt.now() - timedelta(hours=lookback)
-latest_ts = dt.now() + timedelta(hours=0)
+# need to specify machine time in UTC for conversions below
+earliest_ts = dt.now(pytz.utc) - timedelta(hours=lookback)
+latest_ts = dt.now(pytz.utc) + timedelta(hours=0)
 ts = dt.now().strftime('%Y%m%d-%H%M%S')
 
 jobs = []
 
+## Get timezones for each domain once
+# get from stored json copied saved from https://reference.craigslist.org/Areas download May 2018
+# use this as we are having connection issues from too many requests
+with open('/home/urbansim_service_account/scraper2/craigslist_reference.json') as json_data:
+    data = json.load(json_data)
+# # get live from craigslist at http://reference.craigslist.org/Areas'
+# try:
+#     url = 'https://reference.craigslist.org/Areas'
+#     data = requests.get(url, timeout=45).json()
+#     print 'Successfully connected to {}'.format(url)
+# except ConnectionError, e:
+#     logging.debug('ConnectionError at {0}: {1}'.format(url, str(e)))
+#     print ('ConnectionError at {0}: {1}'.format(url, str(e)))
+
+## Parse into {host:{timezone,country}}
+# get domains for US, Canada, Puerto Rico, and Micronesia (Guam)
+country_list = ['US', 'CA', 'PR', 'GU']
+region_time_zone_dict = {}
+for item in data:
+    if item['Country'] in country_list:
+        region_time_zone_dict.update({item['Hostname']:{'Timezone': item['Timezone'], 'Country': item['Country']}})
+logging.info('Found {} domains for countries: {}'.format(len(region_time_zone_dict),country_list))
+print ('Found {} domains for countries: {}'.format(len(region_time_zone_dict),country_list))
+
+# Check if host exists in api and visa versa to see if any updates are required to domain list
+hostname_list = []
+for domain in domains:
+    hostname_list.append(domain[7:].split('.')[0]) # assumes http not https
+
+for host in hostname_list:
+    if host not in region_time_zone_dict.keys():
+        logging.warning('{} host not found in craigslist regions api host list'.format(host))
+        print ('{} host not found in craigslist regions api host list'.format(host))
+
+for key, value in region_time_zone_dict.iteritems():
+    if key not in hostname_list:
+        logging.warning(
+            '{} host in craigslist regions api not found in current list of domains host list'.format(key))
+        print (
+            '{} host in craigslist regions api not found in current list of domains host list'.format(key))
+        logging.warning('Consider adding domain: http://{}.craigslist.org/search/apa'.format(key))
+        print ('Consider adding domain: http://{}.craigslist.org/search/apa'.format(key))
+
 st_time = time.time()
 for domain in domains:
+
+    ## need offset earliest and latest times to deal with domain timezones
+    # get time zones for domain
+    hostname = domain[7:].split('.')[0] # assumes http not https
+    domain_timezone = region_time_zone_dict[hostname]['Timezone']
+    machine_tz = pytz.timezone('America/Los_Angeles')
+    tz = pytz.timezone(domain_timezone)
+
+    # convert machine time UTC to domain time tz and local machine tz to get offset in UTC for both then subtract them
+    earliest_ts_offset_utc = earliest_ts.astimezone(machine_tz).utcoffset() - earliest_ts.astimezone(tz).utcoffset()
+    latest_ts_offset_utc = latest_ts.astimezone(machine_tz).utcoffset() - latest_ts.astimezone(tz).utcoffset()
+
+    # subtract the UTC offset to the UTC machine time
+    earliest_ts_utc_woffset = earliest_ts - earliest_ts_offset_utc
+    latest_ts_utc_woffset = latest_ts - latest_ts_offset_utc
+
+    # convert offset machine time in UTC to domain time in local tz
+    earliest_ts_machine_tz_woffset = earliest_ts_utc_woffset.astimezone(machine_tz)
+    latest_ts_machine_tz_woffset = latest_ts_utc_woffset.astimezone(machine_tz)
+
+    # print to check times
+    fmt = '%Y-%m-%d %H:%M:%S %Z%z'
+    print('earliest: machine time in PST is: {}'.format(earliest_ts.astimezone(machine_tz).strftime(fmt)))
+    print('earliest: converted to PST to match {}: {}'.format(domain_timezone,
+                                                    earliest_ts_utc_woffset.astimezone(machine_tz).strftime(fmt)))
+    print('latest: machine time in PST is: {}'.format(latest_ts.astimezone(machine_tz).strftime(fmt)))
+    print('latest: converted to PST to match {}: {}'.format(domain_timezone,
+                                                            latest_ts_machine_tz_woffset.astimezone(machine_tz).strftime(fmt)))
+
+    # make datetime not tz aware for use in scraper
+    earliest_ts_machine_tz_woffset_clean = earliest_ts_machine_tz_woffset.replace(tzinfo=None)
+    latest_ts_machine_tz_woffset_clean = latest_ts_machine_tz_woffset.replace(tzinfo=None)
+
     s = scraper2.RentalListingScraper(
         domains=[domain],
-        earliest_ts=earliest_ts,
-        latest_ts=latest_ts,
+        earliest_ts=earliest_ts_machine_tz_woffset_clean,
+        latest_ts=latest_ts_machine_tz_woffset_clean,
         fname_ts=ts)
     print 'Starting process for ' + domain
     p = multiprocessing.Process(target=s.run)
@@ -83,7 +166,7 @@ sc.api_call(
     "chat.postMessage",
     channel="#craigslist-scraper",
     text="Archive created: {0} -- {1} KB".format(
-        archive_name + '.zip', archiveSize))
+        archive_name, archiveSize))
 
 # only files created during a given scraping session will be removed
 # which means the data directory may need to be cleaned out from time
