@@ -1,4 +1,8 @@
 from __future__ import division
+
+import warnings
+warnings.simplefilter(action='ignore', category=FutureWarning) # removes to_pydatetime() warning for now till we update it
+
 from datetime import datetime as dt
 from datetime import timedelta
 import logging
@@ -44,16 +48,16 @@ S3_BUCKET = 'scraper2'
 class RentalListingScraper(object):
 
     def __init__(
-            self, 
+            self,
             domains = DOMAINS,
             earliest_ts = EARLIEST_TS,
-            latest_ts = LATEST_TS, 
+            latest_ts = LATEST_TS,
             out_dir = OUT_DIR,
             fname_base = FNAME_BASE,
             fname_ts = FNAME_TS,
             s3_upload = S3_UPLOAD,
             s3_bucket = S3_BUCKET):
-        
+
         self.domains = domains
         self.earliest_ts = earliest_ts
         self.latest_ts = latest_ts
@@ -71,9 +75,9 @@ class RentalListingScraper(object):
         log_fname = '/home/urbansim_service_account/scraper2/logs/' + self.fname_base \
                 + (self.ts if self.fname_ts else '') + '.log'
         logging.basicConfig(filename=log_fname, level=logging.WARNING)
-        
+
         # Suppress info messages from the 'requests' library
-        logging.getLogger('requests').setLevel(logging.WARNING)  
+        logging.getLogger('requests').setLevel(logging.WARNING)
 
 
     def _get_str(self, list):
@@ -82,23 +86,23 @@ class RentalListingScraper(object):
         we want the first of any strings that match the xml query. This helper function
         returns that string, or null if the list is empty.
         '''
-        
+
         if len(list) > 0:
             return list[0]
 
         return ''
-    
-    
+
+
     def _get_int_prefix(self, str, label):
         '''
-        Bedrooms and square footage have the format "xx 1br xx 450ft xx". This helper 
+        Bedrooms and square footage have the format "xx 1br xx 450ft xx". This helper
         function extracts relevant integers from strings of this format.
-        '''     
-        
+        '''
+
         for s in str.split(' '):
             if label in s:
                 return s.strip(label)
-                
+
         return 0
 
 
@@ -108,7 +112,7 @@ class RentalListingScraper(object):
             return np.float(string_value) if string_value else np.nan
         except:
             return np.nan
-        
+
 
     def _parseListing(self, item):
         '''
@@ -138,12 +142,12 @@ class RentalListingScraper(object):
                 bedsqft = housing_raw[0]
                 beds = self._get_int_prefix(bedsqft, "br")  # appears as "1br" to "8br" or missing
                 sqft = self._get_int_prefix(bedsqft, "ft")  # appears as "000ft" or missing
-            
+
             return [pid, dt, url, title, price, neighb, beds, sqft]
         except etree.XMLSyntaxError, e:
             logging.warning('XMLSyntaxError parsing main listing data at {0}: {1}'.format(url, str(e)))
             return None
-        
+
 
     def _parseAddress(self, tree):
         '''
@@ -159,12 +163,12 @@ class RentalListingScraper(object):
         if '?q=loc' not in url:
             # That string precedes an address search
             return ''
-            
+
         return urllib.unquote_plus(url.split('?q=loc')[1]).strip(' :')
 
-    
+
     def _scrapeLatLng(self, url, proxy=True):
-        
+
         proxies = {
                   'http': 'http://87783015bbe2d2f900e2f8be352c414a:foo@charityengine.services:20000',
                   'https': 'https://87783015bbe2d2f900e2f8be352c414a:foo@charityengine.services:20000'
@@ -199,7 +203,7 @@ class RentalListingScraper(object):
             baths = ''
 
         # Sometimes there's no location info, and no map on the page
-        try:            
+        try:
             map = tree.xpath('//div[@id="map"]')
         except etree.XMLSyntaxError, e:
             logging.debug('XMLSyntaxError at {0}: {1}'.format(url, str(e)))
@@ -225,28 +229,44 @@ class RentalListingScraper(object):
             # old api
             # url = 'http://data.fcc.gov/api/block/find?format=json&latitude={}&longitude={}'
             # new api
+            #TODO: dont send to api if the record is not in the US!
             url = 'https://geo.fcc.gov/api/census/block/find?latitude={}&longitude={}&format=json'
             request = url.format(row['latitude'], row['longitude'])
 
-            # TO DO: exception handling
-            response = requests.get(request)
+            # FCC api is very sensitive to repeat requests so need to handle timeouts
+            try:
+                response = requests.get(request, timeout=30)
+            except:
+                time.sleep(2)
+                try:
+                    response = requests.get(request, timeout=30)
+                except ConnectionError, e:
+                    logging.debug('ConnectionError at {0}: {1}'.format(request, str(e)))
+                    return 'connection_errors'
+                except ProxyError, e:
+                    logging.debug('ProxyError at {0}: {1}'.format(request, str(e)))
+                    return 'proxy_errors'
+                except Timeout, e:
+                    logging.debug('Timeout at {0}: {1}'.format(request, str(e)))
+                    return 'timeout_errors'
+
             data = response.json()
             return pd.Series({'fips_block':data['Block']['FIPS'], 'state':data['State']['code'], 'county':data['County']['name']})
 
 
     def _clean_listings(self, filename):
 
-        converters = {'neighb':str, 
-              'title':str, 
-              'price':self._toFloat, 
+        converters = {'neighb':str,
+              'title':str,
+              'price':self._toFloat,
               'beds':self._toFloat,
-              'baths':self._toFloat, 
-              'pid':str, 
-              'dt':str, 
-              'url':str, 
-              'sqft':self._toFloat, 
-              'sourcepage':str, 
-              'lng':self._toFloat, 
+              'baths':self._toFloat,
+              'pid':str,
+              'dt':str,
+              'url':str,
+              'sqft':self._toFloat,
+              'sourcepage':str,
+              'lng':self._toFloat,
               'lat':self._toFloat}
 
         all_listings = pd.read_csv(filename, converters=converters)
@@ -258,7 +278,8 @@ class RentalListingScraper(object):
         all_listings['rent_sqft'] = all_listings['rent'] / all_listings['sqft']
         all_listings['date'] = pd.to_datetime(all_listings['date'], format='%Y-%m-%d')
         all_listings['day_of_week'] = all_listings['date'].apply(lambda x: x.weekday())
-        all_listings['region'] = all_listings['url'].str.extract('https://(.*).craigslist.org', expand=False)
+        # must have 'craigslist.' to catch `.org` in US and `.ca` in canada
+        all_listings['region'] = all_listings['url'].str.extract('https://(.*).craigslist.', expand=False)
         unique_listings = pd.DataFrame(all_listings.drop_duplicates(subset='pid', inplace=False))
         thorough_listings = pd.DataFrame(unique_listings)
         thorough_listings = thorough_listings[thorough_listings['rent'] > 0]
@@ -672,14 +693,3 @@ class RentalListingScraper(object):
                                     count_listings, count_thorough, count_geocoded))
 
         return
-
-
-
-
-
-
-
-
-
-
-
