@@ -74,7 +74,7 @@ class RentalListingScraper(object):
 
         log_fname = '/home/urbansim_service_account/scraper2/logs/' + self.fname_base \
                 + (self.ts if self.fname_ts else '') + '.log'
-        logging.basicConfig(filename=log_fname, level=logging.WARNING)
+        logging.basicConfig(filename=log_fname, level=logging.DEBUG)
 
         # Suppress info messages from the 'requests' library
         logging.getLogger('requests').setLevel(logging.WARNING)
@@ -187,16 +187,20 @@ class RentalListingScraper(object):
                 logging.debug('ProxyError at {0}: {1}'.format(url, str(e)))
                 return 'proxy_errors'
             except etree.XMLSyntaxError, e:
-                logging.debug('XMLSyntaxError at {0}: {1}'.format(url, str(e)))
+                logging.debug('XMLSyntaxError getting url at {0}: {1}'.format(url, str(e)))
                 return 'xml_syntax_errors'
             except Timeout, e:
                 logging.debug('Timeout at {0}: {1}'.format(url, str(e)))
                 return 'timeout_errors'
 
+        if page.status_code != 200:
+            logging.debug('Status Code {0} trying to connect to {1}'.format(url, page.status_code))
+            return 'connection_errors'
+
         try:
             tree = html.fromstring(page.content)
         except etree.XMLSyntaxError, e:
-            logging.debug('XMLSyntaxError at {0}: {1}'.format(url, str(e)))
+            logging.debug('XMLSyntaxError parsing tree at {0}: {1}'.format(url, str(e)))
             return 'xml_syntax_errors'
         try:
             baths = tree.xpath('//div[@class="mapAndAttrs"]/p[@class="attrgroup"]/span/b')[1].text[:-2]
@@ -207,7 +211,7 @@ class RentalListingScraper(object):
         try:
             map = tree.xpath('//div[@id="map"]')
         except etree.XMLSyntaxError, e:
-            logging.debug('XMLSyntaxError at {0}: {1}'.format(url, str(e)))
+            logging.debug('XMLSyntaxError getting map at {0}: {1}'.format(url, str(e)))
             return 'xml_syntax_errors'
 
         if len(map) == 0:
@@ -221,7 +225,7 @@ class RentalListingScraper(object):
             return [baths, lat, lng, accuracy, address]
 
         except etree.XMLSyntaxError, e:
-            logging.debug('XMLSyntaxError at {0}: {1}'.format(url, str(e)))
+            logging.debug('XMLSyntaxError getting map attrs at {0}: {1}'.format(url, str(e)))
             return 'xml_syntax_errors'
 
 
@@ -614,7 +618,7 @@ class RentalListingScraper(object):
                         logging.error(('0 LISTINGS WRITTEN TO CSV AT {0} EVEN THOUGH WE ' +
                             'FOUND {7}: {1} CONNECTION ERRORS, {2} PROXY ERRORS' +
                             ' {3} TIMEOUT ERRORS, {4} XML SYNTAX ERRORS, {5} MAIN PARSING ERRORS,' +
-                            ' {6} AUX PARSING ERRORS').format(
+                            ' {6} aux_data_parsing_errors PARSING ERRORS').format(
                             str.upper(regionName), str(listing_level_error_dict['connection_errors']),
                             str(listing_level_error_dict['proxy_errors']),
                             str(listing_level_error_dict['timeout_errors']),
