@@ -172,7 +172,7 @@ class RentalListingScraper(object):
 
         proxies = {
                   'http': 'http://87783015bbe2d2f900e2f8be352c414a:foo@charityengine.services:20000',
-                  'https': 'https://87783015bbe2d2f900e2f8be352c414a:foo@charityengine.services:20000'
+                  # 'https': 'https://87783015bbe2d2f900e2f8be352c414a:foo@charityengine.services:20000'
                 }
         try:
             page = requests.get(url, timeout=45, proxies=proxies, verify=False) # was 30
@@ -389,7 +389,7 @@ class RentalListingScraper(object):
 
                     proxies = {
                           'http': 'http://87783015bbe2d2f900e2f8be352c414a:foo@charityengine.services:20000',
-                          'https': 'https://87783015bbe2d2f900e2f8be352c414a:foo@charityengine.services:20000'
+                          # 'https': 'https://87783015bbe2d2f900e2f8be352c414a:foo@charityengine.services:20000'
                         }
 
                     # we get 3 tries to connect to a main page
