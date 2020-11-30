@@ -121,13 +121,14 @@ class RentalListingScraper(object):
         '''
         try:
             pid = item.xpath('@data-pid')[0]  # post id, always present
-            info = item.xpath('p[@class="result-info"]')[0]
+            info = item.xpath('div[@class="result-info"]')[0]
             dt = info.xpath('time/@datetime')[0]
-            url = info.xpath('a/@href')[0]
-            if type(info.xpath('a/text()')) == str:
-                title = info.xpath('a/text()')
+            url = item.xpath('a/@href')[0]
+            title_raw = info.xpath('h3/a/text()')
+            if type(title_raw) == str:
+                title = title_raw
             else:
-                title = info.xpath('a/text()')[0]
+                title = title_raw[0]
             price = self._get_str(info.xpath('span[@class="result-meta"]/span[@class="result-price"]/text()')).strip('$')
             neighb_raw = info.xpath('span[@class="result-meta"]/span[@class="result-hood"]/text()')
             if len(neighb_raw) == 0:
