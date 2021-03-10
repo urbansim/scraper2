@@ -22,7 +22,9 @@ import shutil
 import os
 import glob
 import subprocess
-
+import unicodedata
+import re
+    
 requests.packages.urllib3.disable_warnings()
 
 # Some defaults, which can be overridden when the class is called
@@ -108,6 +110,10 @@ class RentalListingScraper(object):
 
     def _toFloat(self, string_value):
         string_value = string_value.strip()
+        string_value = unicodedata.normalize('NFKD',string_value)
+        string_value = string_value.strip()
+        string_value = re.sub('[,. ]', '', string_value)    
+
         try:
             return np.float(string_value) if string_value else np.nan
         except:
