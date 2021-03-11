@@ -108,9 +108,15 @@ class RentalListingScraper(object):
         return 0
 
 
-    def _rentToFloat(self, string_value):
+    def _rentToFloat(string_value):
         string_value = string_value.strip()
-        string_value = unicodedata.normalize('NFKD',string_value)
+        try:
+            string_value = string_value.decode('utf8')
+
+        except:
+            string_value = string_value.decode('unicode-escape')
+
+        string_value = unicodedata.normalize('NFKD',unicode(string_value))
         string_value = string_value.strip()
         string_value = re.sub('[,. ]', '', string_value)    
 
