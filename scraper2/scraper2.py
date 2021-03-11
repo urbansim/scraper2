@@ -108,7 +108,7 @@ class RentalListingScraper(object):
         return 0
 
 
-    def _rentToFloat(string_value):
+    def _rentToFloat(self, string_value):
         string_value = string_value.strip()
         try:
             string_value = string_value.decode('utf8')
