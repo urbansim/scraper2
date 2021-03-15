@@ -22,7 +22,9 @@ import shutil
 import os
 import glob
 import subprocess
-
+import unicodedata
+import re
+    
 requests.packages.urllib3.disable_warnings()
 
 # Some defaults, which can be overridden when the class is called
@@ -106,13 +108,30 @@ class RentalListingScraper(object):
         return 0
 
 
-    def _toFloat(self, string_value):
+    def _rentToFloat(self, string_value):
         string_value = string_value.strip()
+        try:
+            string_value = string_value.decode('utf8')
+
+        except:
+            string_value = string_value.decode('unicode-escape')
+
+        string_value = unicodedata.normalize('NFKD',unicode(string_value))
+        string_value = string_value.strip()
+        string_value = re.sub('[,. ]', '', string_value)    
+
         try:
             return np.float(string_value) if string_value else np.nan
         except:
             return np.nan
 
+    def _toFloat(self, string_value):
+        string_value = string_value.strip()
+
+        try:
+            return np.float(string_value) if string_value else np.nan
+        except:
+            return np.nan
 
     def _parseListing(self, item):
         '''
@@ -263,7 +282,7 @@ class RentalListingScraper(object):
 
         converters = {'neighb':str,
               'title':str,
-              'price':self._toFloat,
+              'price':self._rentToFloat,
               'beds':self._toFloat,
               'baths':self._toFloat,
               'pid':str,
