@@ -70,8 +70,8 @@ class RentalListingScraper(object):
         self.s3_bucket = s3_bucket
         self.ts = fname_ts  # Use timestamp as file id
         self.proxies = {
-                            'http': 'http://87783015bbe2d2f900e2f8be352c414a:foo@charityengine.services:20000',
-                            'https': 'https://87783015bbe2d2f900e2f8be352c414a:foo@charityengine.services:20000'
+                            'http': 'http://:foo@charityengine.services:20000',
+                            'https': 'https://:foo@charityengine.services:20000'
                         }
 
         log_fname = '/home/urbansim_service_account/scraper2/logs/' + self.fname_base \
@@ -190,8 +190,8 @@ class RentalListingScraper(object):
     def _scrapeLatLng(self, url, proxy=True):
 
         proxies = {
-                  'http': 'http://87783015bbe2d2f900e2f8be352c414a:foo@charityengine.services:20000',
-                  # 'https': 'https://87783015bbe2d2f900e2f8be352c414a:foo@charityengine.services:20000'
+                  'http': 'http://:foo@charityengine.services:20000',
+                  # 'https': 'https://:foo@charityengine.services:20000'
                 }
         try:
             page = requests.get(url, timeout=45, proxies=proxies, verify=False) # was 30
@@ -411,8 +411,8 @@ class RentalListingScraper(object):
                     page_num += 1
 
                     proxies = {
-                          'http': 'http://87783015bbe2d2f900e2f8be352c414a:foo@charityengine.services:20000',
-                          # 'https': 'https://87783015bbe2d2f900e2f8be352c414a:foo@charityengine.services:20000'
+                          'http': 'http://:foo@charityengine.services:20000',
+                          # 'https': 'https://:foo@charityengine.services:20000'
                         }
 
                     # we get 3 tries to connect to a main page

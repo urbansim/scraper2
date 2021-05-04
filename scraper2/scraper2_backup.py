@@ -149,7 +149,7 @@ class RentalListingScraper(object):
         s = session
         # if proxy:
         #     requests.packages.urllib3.disable_warnings()
-        #     authenticator = '87783015bbe2d2f900e2f8be352c414a'
+        #     authenticator = ''
         #     proxy_str = 'http://' + authenticator + '@' +'workdistribute.charityengine.com:20000'
         #     s.proxies = {'http': proxy_str, 'https': proxy_str}
         #     s.auth = HTTPProxyAuth(authenticator,'') 
@@ -301,7 +301,7 @@ class RentalListingScraper(object):
 
                     if charity_proxy:
                         requests.packages.urllib3.disable_warnings()
-                        authenticator = '87783015bbe2d2f900e2f8be352c414a'
+                        authenticator = ''
                         proxy_str = 'http://' + authenticator + '@' +'workdistribute.charityengine.com:20000'
                         s.proxies = {'http': proxy_str, 'https': proxy_str}
                         s.auth = HTTPProxyAuth(authenticator,'')
